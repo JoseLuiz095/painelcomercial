@@ -790,7 +790,9 @@
     }
     const csv="\uFEFF"+rows.map(row=>row.map(value=>`"${String(value).replace(/"/g,'""')}"`).join(";")).join("\r\n");
     const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
-    const link=document.createElement("a");link.href=url;link.download=`painel-comercial-${year}.csv`;link.click();URL.revokeObjectURL(url);
+    const link=document.createElement("a");link.href=url;link.download=`painel-comercial-${year}.csv`;link.style.display="none";document.body.appendChild(link);link.click();link.remove();
+    window.setTimeout(()=>URL.revokeObjectURL(url),1000);
+    toast(`CSV de ${year} gerado. Confira os downloads do navegador.`);
   }
 
   function renderDashboard() {

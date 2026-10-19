@@ -21,6 +21,8 @@ function norm(value) {
 }
 
 function getCell(sheet, r, c) {
+  const denseData = sheet && sheet["!data"];
+  if (denseData) return denseData[r] && denseData[r][c] ? denseData[r][c] : null;
   if (Array.isArray(sheet)) return sheet[r] && sheet[r][c] ? sheet[r][c] : null;
   return sheet[XLSX.utils.encode_cell({ r, c })] || null;
 }

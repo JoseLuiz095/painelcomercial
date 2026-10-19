@@ -1,4 +1,5 @@
-importScripts("https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js");
+// Keep the parser available even when a mobile network blocks third-party CDNs.
+importScripts("./xlsx.full.min.js");
 
 const MONTHS = new Map([
   ["JAN",1],["JANEIRO",1],["JANUARY",1],

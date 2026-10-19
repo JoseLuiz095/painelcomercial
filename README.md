@@ -32,4 +32,6 @@ O painel deixa o comparativo anual indisponível quando o ano anterior carregado
 
 ## Publicação
 
-O projeto não tem etapa de build. O GitHub Pages publica os arquivos da raiz do repositório. A biblioteca SheetJS é carregada de seu CDN oficial para abrir os arquivos Excel.
+O projeto não tem etapa de build. O GitHub Pages publica os arquivos da raiz do repositório. A biblioteca oficial SheetJS está incluída localmente (`xlsx.full.min.js`), então a leitura de planilhas não depende de carregar um CDN externo.
+
+O projeto inclui SheetJS Community Edition 0.20.3, copyright © 2012–presente SheetJS LLC, sob a licença Apache 2.0. Consulte `LICENSE-SHEETJS.txt`.

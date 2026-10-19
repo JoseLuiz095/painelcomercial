@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0d2220">
+  <meta name="description" content="Painel comercial de vendas, metas, faturamento e crescimento por supervisor e consultor.">
+  <title>Painel Comercial | Vendas e metas</title>
+  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./charts.css">
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#topo" aria-label="Painel Comercial">
+        <span class="brand-mark">P</span>
+        <span class="brand-copy"><strong>PAINEL</strong><small>COMERCIAL</small></span>
+      </a>
+      <div class="topbar-right">
+        <span class="privacy-indicator"><span class="privacy-dot"></span> Arquivo processado no seu dispositivo</span>
+        <button class="icon-button" id="printButton" type="button" title="Imprimir ou salvar em PDF" aria-label="Imprimir painel">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-4a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3v4a2 2 0 0 1-2 2h-2M7 14h10v7H7z"/><path d="M17 11h.01"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main id="topo">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="eyebrow-line"></span> INTELIGÊNCIA COMERCIAL</p>
+          <h1>Vendas com contexto.<br><em>Crescimento à vista.</em></h1>
+          <p class="hero-text">Acompanhe meta, venda, atingimento e faturamento. Compare o crescimento esperado com o realizado por supervisor e consultor.</p>
+        </div>
+        <div class="hero-action-card">
+          <div class="upload-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></svg>
+          </div>
+          <div class="upload-copy">
+            <strong>Carregue suas planilhas</strong>
+            <span>Adicione um ou mais arquivos Excel para atualizar o painel.</span>
+          </div>
+          <label class="button button-primary upload-button">
+            <input id="fileInput" type="file" accept=".xlsx,.xls,.xlsm,.csv" multiple>
+            <span>Selecionar arquivos</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+          </label>
+          <small class="privacy-note">Seus arquivos não são enviados nem salvos pelo painel.</small>
+        </div>
+      </section>
+
+      <section class="toolbar panel">
+        <div class="toolbar-heading">
+          <span class="section-kicker">VISÃO GERAL</span>
+          <span id="dataStatus" class="data-status"><span class="status-dot"></span> Aguardando planilha</span>
+        </div>
+        <div class="filters">
+          <label class="filter-control">
+            <span>Ano analisado</span>
+            <select id="yearFilter" aria-label="Ano analisado"><option value="2026">2026</option></select>
+          </label>
+          <label class="filter-control">
+            <span>Supervisor</span>
+            <select id="supervisorFilter" aria-label="Filtrar por supervisor"><option value="">Todos os supervisores</option></select>
+          </label>
+          <label class="filter-control">
+            <span>Consultor</span>
+            <select id="consultantFilter" aria-label="Filtrar por consultor"><option value="">Todos os consultores</option></select>
+          </label>
+          <label class="filter-control search-control">
+            <span>Buscar</span>
+            <div class="search-input-wrap">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4 4"/></svg>
+              <input id="searchInput" type="search" placeholder="Nome ou código" autocomplete="off">
+            </div>
+          </label>
+        </div>
+        <div id="fileList" class="file-list" hidden></div>
+      </section>
+
+      <section id="emptyState" class="empty-state panel">
+        <div class="empty-art" aria-hidden="true"><span>↗</span><i></i><i></i><i></i></div>
+        <div>
+          <p class="section-kicker">SEU PAINEL ESTÁ PRONTO</p>
+          <h2>Carregue a planilha para começar</h2>
+          <p>O painel reconhece as abas de vendas, metas e hierarquia do arquivo <strong>ANALISE 2026</strong>. Para comparar vários anos, selecione também as planilhas históricas.</p>
+        </div>
+        <label class="button button-primary upload-button">
+          <input class="file-input-proxy" type="file" accept=".xlsx,.xls,.xlsm,.csv" multiple>
+          <span>Selecionar planilhas</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+        </label>
+      </section>
+
+      <div id="dashboard" hidden>
+        <section class="kpi-grid" aria-label="Indicadores principais">
+          <article class="kpi-card kpi-primary">
+            <div class="kpi-top"><span>Venda realizada</span><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M4 18V6m0 12h16M8 15l3-4 3 2 5-7"/><path d="M16 6h3v3"/></svg></span></div>
+            <strong id="kpiSales">—</strong><div class="kpi-foot"><span id="kpiSalesPeriod">Acumulado do ano</span><span id="kpiSalesCount" class="kpi-trend">—</span></div>
+          </article>
+          <article class="kpi-card">
+            <div class="kpi-top"><span>Meta do ano</span><span class="kpi-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><path d="m12 12 6-6"/></svg></span></div>
+            <strong id="kpiTarget">—</strong><div class="kpi-foot"><span>Meta anual consolidada</span><span id="kpiTargetNote" class="kpi-trend">—</span></div>
+          </article>
+          <article class="kpi-card">
+            <div class="kpi-top"><span>Atingimento</span><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M5 19V5m0 14h14"/><path d="m8 15 3-3 2 2 5-6"/></svg></span></div>
+            <strong id="kpiAttainment">—</strong><div class="progress-track"><span id="attainmentBar"></span></div><div class="kpi-foot"><span>Venda ÷ meta anual</span><span id="attainmentLabel" class="kpi-trend">—</span></div>
+          </article>
+          <article class="kpi-card">
+            <div class="kpi-top"><span>Faturamento</span><span class="kpi-icon"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 11h3m-3 4h8m-8 3h5"/></svg></span></div>
+            <strong id="kpiRevenue">—</strong><div class="kpi-foot"><span id="kpiRevenuePeriod">Notas faturadas no período</span><span id="kpiRevenueCount" class="kpi-trend">—</span></div>
+          </article>
+        </section>
+
+        <section class="growth-section panel">
+          <div class="section-heading">
+            <div><span class="section-kicker">PLANO × REALIDADE</span><h2>O crescimento que se esperava — e o que aconteceu</h2><p>Perspectiva = meta do ano ÷ venda do ano anterior. Realizado = venda atual e venda anterior nos mesmos meses disponíveis.</p></div>
+            <span id="comparisonPeriod" class="period-pill">Período comparável</span>
+          </div>
+          <div class="growth-layout">
+            <div class="growth-stat-card expected-card">
+              <span class="growth-label"><span class="legend-dot expected-dot"></span>Perspectiva de crescimento</span>
+              <strong id="growthExpected">—</strong>
+              <small id="growthExpectedNote">Meta do ano selecionado versus venda anual anterior</small>
+            </div>
+            <div class="growth-stat-card actual-card">
+              <span class="growth-label"><span class="legend-dot actual-dot"></span>Crescimento realizado</span>
+              <strong id="growthRealized">—</strong>
+              <small id="growthRealizedNote">Venda atual versus venda anterior no mesmo período</small>
+            </div>
+            <div class="growth-chart-card">
+              <div class="chart-card-heading"><strong>Por supervisor</strong><span>Variação sobre a venda do ano anterior</span></div>
+              <div id="growthChart" class="growth-chart" aria-label="Comparação de crescimento por supervisor"></div>
+            </div>
+          </div>
+          <div id="growthHint" class="inline-hint" hidden></div>
+        </section>
+
+        <section class="trend-section panel">
+          <div class="section-heading compact-heading">
+            <div><span class="section-kicker">EVOLUÇÃO ANUAL</span><h2>Vendas e metas ao longo dos anos</h2></div>
+            <span class="chart-legend"><span class="legend-dot sales-dot"></span>Venda <span class="legend-dot target-dot"></span>Meta</span>
+          </div>
+          <div id="trendChart" class="trend-chart" aria-label="Vendas e metas por ano"></div>
+          <div class="chart-note">Anos sem valores na base carregada aparecem sem barra. A meta é consolidada separadamente da venda realizada.</div>
+        </section>
+
+        <section class="chart-grid">
+          <article class="panel chart-panel">
+            <div class="section-heading compact-heading">
+              <div><span class="section-kicker">DETALHE DO ANO</span><h2>Venda, meta e comparação mensal</h2></div>
+              <span class="chart-legend"><span class="legend-dot sales-dot"></span>Venda <span class="legend-dot target-dot"></span>Meta <span class="legend-dot prior-dot"></span>Ano anterior</span>
+            </div>
+            <div id="monthlyChart" class="monthly-chart" aria-label="Vendas e metas por mês"></div>
+          </article>
+          <article class="panel chart-panel">
+            <div class="section-heading compact-heading">
+              <div><span class="section-kicker">DESEMPENHO INDIVIDUAL</span><h2>Consultores em destaque</h2></div>
+              <span id="rankingPeriod" class="period-pill">Ano selecionado</span>
+            </div>
+            <div id="rankingChart" class="ranking-chart" aria-label="Ranking de consultores por venda"></div>
+          </article>
+        </section>
+
+        <section class="detail-section panel">
+          <div class="section-heading compact-heading">
+            <div><span class="section-kicker">DETALHE DE DESEMPENHO</span><h2>Supervisores e consultores</h2><p>Abra um supervisor para ver os consultores associados.</p></div>
+            <button id="exportButton" class="button button-secondary" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/></svg>Exportar CSV</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th class="name-col">Supervisor / consultor</th>
+                <th>Venda realizada</th><th>Meta anual</th><th>Atingimento</th><th>Faturamento</th><th>Perspectiva*</th><th>Realizado**</th>
+              </tr></thead>
+              <tbody id="detailRows"></tbody>
+            </table>
+            <div id="tableEmpty" class="table-empty" hidden>Nenhum registro corresponde aos filtros.</div>
+          </div>
+          <div class="table-footnote"><span>* Meta do ano selecionado versus venda anual do ano anterior.</span><span>** Vendas do ano selecionado e do anterior em meses equivalentes.</span></div>
+        </section>
+
+        <section id="dataQuality" class="quality-note panel" hidden></section>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <span>PAINEL COMERCIAL</span><span>Vendas • metas • faturamento • crescimento</span><span class="footer-lock">Seus arquivos permanecem no navegador</span>
+    </footer>
+  </div>
+</body>
+</html>

@@ -197,6 +197,12 @@
     }
   }
 
+  function salesYearsInRows(rows) {
+    return [...new Set((rows || []).filter(row => Object.values(row.months || {}).some(values =>
+      values && typeof values === "object" && (Number(values.salesRows) > 0 || (values.sales != null && Number(values.sales) !== 0))
+    )).map(row => Number(row.year)).filter(Number.isFinite))].sort((a,b)=>a-b);
+  }
+
   function fingerprint(file) {
     return `${file.name}|${file.size}|${file.lastModified}`;
   }
@@ -263,6 +269,8 @@
       return;
     }
     let loaded = 0;
+    const importedSalesYears = new Set();
+    const importedTargetYears = new Set();
     showLoading("Lendo as fontes", `Processamento local no navegador. Iniciando ${unique.length} arquivo(s)…`);
     for (const file of unique) {
       try {
@@ -270,7 +278,9 @@
         mergeActual(result.actuals || []);
         mergeTargets(result.targets || []);
         mergeMappings(result.mappings || []);
-        state.sourceFiles.push({ name: file.name, stats: result.stats || {}, actualYears: result.actualYears || [], targetYears: result.targetYears || [] });
+        salesYearsInRows(result.actuals).forEach(year => importedSalesYears.add(year));
+        (result.targetYears || []).forEach(year => importedTargetYears.add(Number(year)));
+        state.sourceFiles.push({ name: file.name, stats: result.stats || {}, actualYears: result.actualYears || [], salesYears: salesYearsInRows(result.actuals), targetYears: result.targetYears || [] });
         state.fingerprints.add(fingerprint(file));
         loaded++;
       } catch (error) {
@@ -281,7 +291,12 @@
     if (loaded) {
       refreshYearOptions();
       renderDashboard();
-      toast(`${loaded} arquivo(s) carregado(s) com sucesso.`);
+      const salesYears = [...importedSalesYears].sort((a,b)=>a-b);
+      const targetYears = [...importedTargetYears].sort((a,b)=>a-b);
+      const coverage = salesYears.length
+        ? `Venda encontrada em ${salesYears.join(", ")}.`
+        : `Nenhuma venda realizada encontrada nos arquivos carregados${targetYears.length ? ` (metas ${targetYears.join(", ")})` : ""}.`;
+      toast(`${loaded} arquivo(s) carregado(s). ${coverage}`);
     } else if (!state.actuals.size && !state.targets.size) {
       renderDashboard();
     }
@@ -299,7 +314,11 @@
     for (const row of state.targets.values()) years.add(Number(row.year));
     state.years = [...years].filter(year => Number.isFinite(year)).sort((a, b) => a - b);
     const current = Number(elements.year.value);
-    const selected = state.years.includes(current) ? current : (state.years.includes(2026) ? 2026 : (state.years[state.years.length - 1] || 2026));
+    const availableSalesYears = [...new Set([...state.actuals.values()].filter(row=>hasAmount(row,"sales",ALL_MONTHS)).map(row => Number(row.year)))].sort((a,b)=>a-b);
+    const currentHasSales = hasYearData(current);
+    const selected = state.years.includes(current) && currentHasSales
+      ? current
+      : (availableSalesYears[availableSalesYears.length - 1] || (state.years.includes(current) ? current : (state.years[state.years.length - 1] || 2026)));
     state.selectedYear = selected;
     elements.year.innerHTML = (state.years.length ? state.years : [2026]).map(year => `<option value="${year}">${year}</option>`).join("");
     elements.year.value = String(selected);
@@ -321,9 +340,10 @@
   function maxActualMonth(year, predicate = null) {
     let max = 0;
     for (const row of actualRowsByYear(year, predicate)) {
-      for (const month of Object.keys(row.months || {})) {
+      for (const [month, values] of Object.entries(row.months || {})) {
         const value = Number(month);
-        if (value >= 1 && value <= 12) max = Math.max(max, value);
+        const hasSales = values && typeof values === "object" && (safeNumber(values.sales) !== 0 || safeNumber(values.salesRows) > 0);
+        if (hasSales && value >= 1 && value <= 12) max = Math.max(max, value);
       }
     }
     return max;
@@ -348,7 +368,7 @@
   }
 
   function hasYearData(year) {
-    return actualRows(year).length > 0;
+    return actualRows(year).some(row => hasAmount(row, "sales", ALL_MONTHS));
   }
 
   function getTarget(scope, id, year, monthScope = state.selectedMonths) {
@@ -864,10 +884,12 @@
     const previousYear=year-1;
     const hasPrev=hasYearData(previousYear);
     const currentMonth=maxActualMonth(year);
+    const hasCurrentSales=hasYearData(year);
     const previousMonth=maxActualMonth(previousYear);
     const consultantTargets=[...state.targets.values()].some(row=>row.scope==="consultor"&&Number(row.year)===year);
     const hasSupervisorTargets=[...state.targets.values()].some(row=>row.scope==="supervisor"&&Number(row.year)===year);
     const messages=[];
+    if(!hasCurrentSales) messages.push(`<strong>Sem venda realizada em ${year}:</strong> nenhum movimento de venda desse ano foi carregado. Importe a base de vendas de ${year}; metas não substituem venda realizada.`);
     if(!hasPrev) messages.push(`<strong>Comparativo pendente:</strong> a base carregada não contém venda realizada de ${previousYear}. Carregue também o arquivo desse ano para calcular perspectiva e crescimento realizado.`);
     else if(previousMonth<12) messages.push(`<strong>Base parcial:</strong> a venda de ${previousYear} chega até ${MONTH_NAMES[Math.max(0,previousMonth-1)]}. A perspectiva anual fica indisponível até haver os 12 meses; o realizado compara ${monthLabel()} nos dois anos.`);
     if(hasPrev && !hasComparableMonths(year)) messages.push(`<strong>Comparação incompleta:</strong> a base não contém todos os meses selecionados nos dois anos; o crescimento realizado fica indisponível.`);
@@ -885,13 +907,14 @@
   }
 
   function updateDataStatus(year) {
-    const actualYears=[...new Set([...state.actuals.values()].map(row=>Number(row.year)))].sort((a,b)=>a-b);
+    const actualYears=[...new Set([...state.actuals.values()].filter(row=>hasAmount(row,"sales",ALL_MONTHS)).map(row=>Number(row.year)))].sort((a,b)=>a-b);
     const targetYears=[...new Set([...state.targets.values()].map(row=>Number(row.year)))].sort((a,b)=>a-b);
     const missingSalesYears=targetYears.filter(targetYear=>!actualYears.includes(targetYear));
     elements.dataStatus.classList.add("ready");
-    elements.dataStatus.innerHTML=`<span class="status-dot"></span> ${state.sourceFiles.length} arquivo(s) · ${actualYears.length?`vendas ${actualYears.join(", ")}`:"sem venda realizada"}${missingSalesYears.length?` · sem venda ${missingSalesYears.join(", ")}`:""} · metas ${targetYears.join(", ")||"—"}`;
+    const selectedYearStatus=actualYears.includes(Number(year))?` · ${year} com venda`:` · ${year} sem venda carregada`;
+    elements.dataStatus.innerHTML=`<span class="status-dot"></span> ${state.sourceFiles.length} arquivo(s) · ${actualYears.length?`vendas ${actualYears.join(", ")}`:"sem venda realizada"}${selectedYearStatus}${missingSalesYears.length?` · sem venda ${missingSalesYears.join(", ")}`:""} · metas ${targetYears.join(", ")||"—"}`;
     elements.fileList.hidden=!state.sourceFiles.length;
-    elements.fileList.innerHTML=state.sourceFiles.map(item=>`<span class="file-chip"><strong>${escapeHtml(item.name)}</strong>${item.stats?.actualRows?` · ${number.format(item.stats.actualRows)} linhas de venda`:""}${item.stats?.targetRows?` · ${number.format(item.stats.targetRows)} metas`:""}</span>`).join("");
+    elements.fileList.innerHTML=state.sourceFiles.map(item=>`<span class="file-chip"><strong>${escapeHtml(item.name)}</strong>${item.salesYears?.length?` · venda ${item.salesYears.join(", ")}`:" · sem venda realizada"}${item.stats?.targetRows?` · ${number.format(item.stats.targetRows)} metas`:""}</span>`).join("");
   }
 
   function downloadCsv() {

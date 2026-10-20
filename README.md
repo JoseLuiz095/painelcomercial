@@ -5,12 +5,22 @@ Dashboard estático em português, adaptado para desktop e celular, para acompan
 ## Como usar
 
 1. Abra o endereço do GitHub Pages.
-2. Selecione um ou mais arquivos `.xlsx`, `.xls`, `.xlsm` ou `.csv`.
+2. Selecione um ou mais arquivos `.xlsx`, `.xls`, `.xlsm`, `.csv` ou `.json`.
 3. Escolha o ano, supervisor e consultor nos filtros.
 4. Escolha um ou mais meses no filtro **Meses analisados**.
 5. Use **Exportar CSV** ou **Imprimir** para baixar uma cópia dos resultados.
 
 Os arquivos são lidos no próprio navegador em um Web Worker. O painel não envia nem armazena os arquivos. Recarregar a página limpa os dados carregados.
+
+## Formatos de dados
+
+- Planilhas Excel: abas de vendas com código do consultor, classificação e valor; abas `BASE_META`, `BASE_META_REP` e `Planilha2` para metas e hierarquia.
+- CSV ACP: relatórios `VENDA_AAAA.csv` e `FATURAMENTO_AAAA.csv`, com blocos mensais de consultores e supervisores.
+- JSON anual: objeto com `ano` e `supervisores`, cada supervisor contendo `consultores` com mapas mensais `vendas`, `faturamento` e, opcionalmente, `metas`.
+
+O painel soma as fontes carregadas por código, ano, supervisor e mês. O ano só aparece como venda realizada quando há registros de venda para ele; uma meta histórica sozinha não cria venda. Os nomes dos anos sem venda ficam visíveis no status da base para indicar que ainda falta importar esse histórico.
+
+Para cada ano, use o JSON anual ou os dois relatórios CSV (venda e faturamento). Não carregue o JSON e os CSV correspondentes ao mesmo ano juntos, pois são duas cópias da mesma base.
 
 ## Abas reconhecidas
 

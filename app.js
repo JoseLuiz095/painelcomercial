@@ -250,20 +250,20 @@
         if (message.type === "done") { worker.terminate(); resolve(message.result); }
         if (message.type === "error") { worker.terminate(); reject(new Error(message.message)); }
       };
-      worker.onerror = event => { worker.terminate(); reject(new Error(event.message || "Não foi possível carregar o leitor de Excel.")); };
+      worker.onerror = event => { worker.terminate(); reject(new Error(event.message || "Não foi possível ler esse arquivo.")); };
       worker.postMessage({ file, requestId });
     });
   }
 
   async function handleFiles(fileList) {
-    const files = [...fileList].filter(file => /\.(xlsx|xls|xlsm|csv)$/i.test(file.name));
+    const files = [...fileList].filter(file => /\.(xlsx|xls|xlsm|csv|json)$/i.test(file.name));
     const unique = files.filter(file => !state.fingerprints.has(fingerprint(file)));
     if (!unique.length) {
-      toast(files.length ? "Esse arquivo já foi carregado." : "Selecione um arquivo Excel ou CSV.", !files.length);
+      toast(files.length ? "Esse arquivo já foi carregado." : "Selecione um arquivo Excel, CSV ou JSON.", !files.length);
       return;
     }
     let loaded = 0;
-    showLoading("Lendo as planilhas", `Processamento local no navegador. Iniciando ${unique.length} arquivo(s)…`);
+    showLoading("Lendo as fontes", `Processamento local no navegador. Iniciando ${unique.length} arquivo(s)…`);
     for (const file of unique) {
       try {
         const result = await processFile(file);
@@ -887,8 +887,9 @@
   function updateDataStatus(year) {
     const actualYears=[...new Set([...state.actuals.values()].map(row=>Number(row.year)))].sort((a,b)=>a-b);
     const targetYears=[...new Set([...state.targets.values()].map(row=>Number(row.year)))].sort((a,b)=>a-b);
+    const missingSalesYears=targetYears.filter(targetYear=>!actualYears.includes(targetYear));
     elements.dataStatus.classList.add("ready");
-    elements.dataStatus.innerHTML=`<span class="status-dot"></span> ${state.sourceFiles.length} arquivo(s) · ${actualYears.length?`vendas ${actualYears.join(", ")}`:"sem venda realizada"} · metas ${targetYears.join(", ")||"—"}`;
+    elements.dataStatus.innerHTML=`<span class="status-dot"></span> ${state.sourceFiles.length} arquivo(s) · ${actualYears.length?`vendas ${actualYears.join(", ")}`:"sem venda realizada"}${missingSalesYears.length?` · sem venda ${missingSalesYears.join(", ")}`:""} · metas ${targetYears.join(", ")||"—"}`;
     elements.fileList.hidden=!state.sourceFiles.length;
     elements.fileList.innerHTML=state.sourceFiles.map(item=>`<span class="file-chip"><strong>${escapeHtml(item.name)}</strong>${item.stats?.actualRows?` · ${number.format(item.stats.actualRows)} linhas de venda`:""}${item.stats?.targetRows?` · ${number.format(item.stats.targetRows)} metas`:""}</span>`).join("");
   }

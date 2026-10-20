@@ -92,6 +92,161 @@ function parseYear(value) {
   return match ? Number(match[0]) : null;
 }
 
+function decodeText(buffer) {
+  const bytes = new Uint8Array(buffer);
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+  catch (_) { return new TextDecoder("windows-1252").decode(bytes); }
+}
+
+function asciiText(value) {
+  return String(value == null ? "" : value).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function parseBrazilianNumber(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  const text = String(value == null ? "" : value).trim().replace(/\s/g, "");
+  if (!text) return 0;
+  const parsed = Number(text.replace(/\./g, "").replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function datasetMonths(value) {
+  const entries = value && typeof value === "object" ? Object.entries(value) : [];
+  return entries.reduce((months, [rawMonth, rawValue]) => {
+    const month = Number(rawMonth);
+    const amount = asAmount(rawValue);
+    if (Number.isInteger(month) && month >= 1 && month <= 12 && amount != null) months[String(month)] = amount;
+    return months;
+  }, {});
+}
+
+function parseYearDataset(data, result, stats, fileName) {
+  const year = parseYear(data && (data.ano || data.year)) || parseYear(fileName);
+  if (!year || !Array.isArray(data && data.supervisores)) return false;
+  let actualRows = 0;
+  let targetRows = 0;
+  for (const supervisor of data.supervisores) {
+    for (const consultant of supervisor && (supervisor.consultores || supervisor.consultants) || []) {
+      const consultantId = cleanId(consultant.codigoConsultor || consultant.consultantCode || consultant.codigo || consultant.id);
+      const consultantName = String(consultant.nome || consultant.name || "").trim();
+      const supervisorId = cleanId(consultant.codigoSupervisor || supervisor.codigoSupervisor || supervisor.codigo || consultant.supervisorId || supervisor.id);
+      const supervisorName = String(supervisor.nome || supervisor.name || consultant.supervisorName || "Sem supervisor").trim();
+      if (!consultantId && !consultantName) continue;
+      const sales = datasetMonths(consultant.vendas || consultant.sales);
+      const revenue = datasetMonths(consultant.faturamento || consultant.revenue);
+      const metas = datasetMonths(consultant.metas || consultant.targets);
+      const months = {};
+      for (let month = 1; month <= 12; month++) {
+        const key = String(month);
+        const hasSales = Object.prototype.hasOwnProperty.call(sales, key);
+        const hasRevenue = Object.prototype.hasOwnProperty.call(revenue, key);
+        if (!hasSales && !hasRevenue) continue;
+        months[key] = {
+          sales: sales[key] || 0,
+          revenue: revenue[key] || 0,
+          salesRows: hasSales ? 1 : 0,
+          revenueRows: hasRevenue ? 1 : 0
+        };
+      }
+      if (Object.keys(months).length) {
+        result.actuals.push({
+          year,
+          consultantId: consultantId || `nome:${norm(consultantName)}`,
+          supervisorId: supervisorId || `nome:${norm(supervisorName)}`,
+          consultantName,
+          supervisorName,
+          months
+        });
+        actualRows += Object.keys(months).length;
+      }
+      if (Object.keys(metas).length) {
+        result.targets.push({
+          scope: "consultor",
+          id: consultantId || `nome:${norm(consultantName)}`,
+          year,
+          name: consultantName,
+          months: metas
+        });
+        targetRows += Object.keys(metas).length;
+      }
+    }
+  }
+  if (!actualRows && !targetRows) return false;
+  stats.actualRows += actualRows;
+  stats.targetRows += targetRows;
+  stats.rawSheets = [...new Set([...(stats.rawSheets || []), "JSON de vendas/faturamento"])];
+  stats.rawSheet = stats.rawSheets.join(", ");
+  result.actualYears = [...new Set([...result.actualYears, ...(actualRows ? [year] : [])])].sort((a,b)=>a-b);
+  result.targetYears = [...new Set([...result.targetYears, ...(targetRows ? [year] : [])])].sort((a,b)=>a-b);
+  return true;
+}
+
+function parseAcpCsv(text, fileName, result, stats) {
+  const lines = String(text || "").split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const fileKind = asciiText(fileName).toLowerCase();
+  const bodyKind = asciiText(text.slice(0, 12000)).toLowerCase();
+  const metric = /fatur|receita|invoice/.test(fileKind) || /relatorio\s+de\s+faturamento/.test(bodyKind) ? "revenue" : "sales";
+  const fallbackYear = parseYear(fileName);
+  let year = fallbackYear;
+  let month = 1;
+  let pending = [];
+  const records = new Map();
+
+  function addConsultants(supervisor) {
+    for (const item of pending) {
+      const supervisorId = supervisor.code || `nome:${norm(supervisor.name)}`;
+      const consultantId = item.code || `nome:${norm(item.name)}`;
+      const key = `${item.year}|${consultantId}|${supervisorId}`;
+      if (!records.has(key)) records.set(key, emptyActual(item.year, consultantId, supervisorId, item.name, supervisor.name));
+      const record = records.get(key);
+      if (!record.consultantName && item.name) record.consultantName = item.name;
+      if (!record.supervisorName && supervisor.name) record.supervisorName = supervisor.name;
+      const monthKey = String(item.month);
+      if (!record.months[monthKey]) record.months[monthKey] = { sales: 0, revenue: 0, salesRows: 0, revenueRows: 0 };
+      const bucket = record.months[monthKey];
+      bucket[metric] += item.amount;
+      bucket[metric === "sales" ? "salesRows" : "revenueRows"]++;
+      stats.actualRows++;
+    }
+    pending = [];
+  }
+
+  for (const rawLine of lines) {
+    const line = asciiText(rawLine);
+    const monthMatch = line.match(/^(?:ano\s*[:\-–]?\s*(\d{4})\s*)?mes\s*[:\-–]?\s*(\d{1,2})\s*;+/i);
+    if (monthMatch) {
+      if (monthMatch[1]) year = Number(monthMatch[1]);
+      month = Math.min(12, Number(monthMatch[2]) + 1);
+      continue;
+    }
+
+    const personMatch = line.match(/^\s*(consultor|supervisor)\s*[:\-–]?\s+(?:(\d+)\s*[-–]\s*)?(.+?);+(.*)$/i);
+    if (!personMatch) continue;
+    const type = personMatch[1].toLowerCase();
+    const code = String(personMatch[2] || "").trim();
+    const name = String(personMatch[3] || "").trim().replace(/\s+/g, " ");
+    const values = String(personMatch[4] || "").split(";").map(value => value.trim()).filter(Boolean);
+    const amount = parseBrazilianNumber(values[1]);
+    if (type === "consultor") {
+      pending.push({ year: year || fallbackYear, month: Math.min(12, month), code, name, amount });
+    } else {
+      addConsultants({ code, name: name || "Sem supervisor" });
+    }
+  }
+
+  if (pending.length) addConsultants({ code: "", name: "Sem supervisor" });
+  if (!records.size) return false;
+  result.actuals.push(...records.values());
+  const years = [...new Set([...records.values()].map(row => row.year).filter(Boolean))].sort((a,b)=>a-b);
+  result.actualYears = [...new Set([...result.actualYears, ...years])].sort((a,b)=>a-b);
+  stats.rawSheets = [...new Set([...(stats.rawSheets || []), `CSV ACP ${metric === "sales" ? "vendas" : "faturamento"}`])];
+  stats.rawSheet = stats.rawSheets.join(", ");
+  return true;
+}
+
 function parseMonth(value) {
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.getMonth() + 1;
   if (typeof value === "number" && value >= 1 && value <= 12) return Math.floor(value);
@@ -295,16 +450,28 @@ self.onmessage = async event => {
   const stats = { fileName: file.name, actualRows: 0, targetRows: 0, rawSheet: null, targetSheets: [] };
   const result = { fileName: file.name, actuals: [], targets: [], mappings: [], actualYears: [], targetYears: [] };
   try {
-    self.postMessage({ type: "progress", requestId, fileName: file.name, detail: "Abrindo o Excel no navegador…" });
+    self.postMessage({ type: "progress", requestId, fileName: file.name, detail: "Abrindo o arquivo no navegador…" });
     const data = await file.arrayBuffer();
-    const workbook = XLSX.read(data, { type: "array", dense: true, cellDates: true, cellFormula: false, cellHTML: false, cellStyles: false });
-    self.postMessage({ type: "progress", requestId, fileName: file.name, detail: "Identificando abas de vendas, metas e hierarquia…" });
-    parseMappings(workbook, result);
-    parseTransactions(workbook, result, stats);
-    const managerMeta = matchSheetName(workbook, ["BASE_META"]);
-    const consultantMeta = matchSheetName(workbook, ["BASE_META_REP", "BASE_META6"]);
-    parseTargetSheet(workbook, managerMeta, "supervisor", result, stats);
-    parseTargetSheet(workbook, consultantMeta, "consultor", result, stats);
+    const extension = String(file.name || "").split(".").pop().toLowerCase();
+    if (extension === "json") {
+      const parsed = JSON.parse(decodeText(data));
+      if (!parseYearDataset(parsed, result, stats, file.name)) throw new Error("O JSON não tem o formato anual esperado de supervisores e consultores.");
+    } else {
+      const workbook = XLSX.read(data, { type: "array", dense: true, cellDates: true, cellFormula: false, cellHTML: false, cellStyles: false });
+      self.postMessage({ type: "progress", requestId, fileName: file.name, detail: "Identificando vendas, metas e hierarquia…" });
+      parseMappings(workbook, result);
+      parseTransactions(workbook, result, stats);
+      const managerMeta = matchSheetName(workbook, ["BASE_META"]);
+      const consultantMeta = matchSheetName(workbook, ["BASE_META_REP", "BASE_META6"]);
+      parseTargetSheet(workbook, managerMeta, "supervisor", result, stats);
+      parseTargetSheet(workbook, consultantMeta, "consultor", result, stats);
+      if (extension === "csv" && !result.actuals.length && !result.targets.length) {
+        const csvText = decodeText(data);
+        if (!parseAcpCsv(csvText, file.name, result, stats)) {
+          throw new Error("Não encontrei vendas nesse CSV. Para relatórios ACP, envie VENDA_AAAA.csv ou FATURAMENTO_AAAA.csv com os blocos de consultor e supervisor.");
+        }
+      }
+    }
     result.stats = stats;
     result.targetYears = [...new Set(result.targets.map(item => item.year))].sort((a,b)=>a-b);
     if (result.actuals.length === 0 && result.targets.length === 0) {

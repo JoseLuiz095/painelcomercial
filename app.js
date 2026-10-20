@@ -3,6 +3,8 @@
 
   const MONTH_NAMES = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
   const MONTH_WORDS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+  const ALL_MONTHS = new Set(Array.from({ length: 12 }, (_, index) => index + 1));
+  const CONSULTANT_KEY_SEPARATOR = "\u241f";
   const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
   const currency2 = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const percent = new Intl.NumberFormat("pt-BR", { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -19,13 +21,16 @@
     fingerprints: new Set(),
     collapsed: new Set(),
     years: [],
-    selectedYear: null
+    selectedYear: null,
+    selectedMonths: new Set(ALL_MONTHS),
+    monthSelectionTouched: false
   };
 
   const $ = id => document.getElementById(id);
   const fileInputs = [$("fileInput"), ...document.querySelectorAll(".file-input-proxy")];
   const elements = {
     year: $("yearFilter"), supervisor: $("supervisorFilter"), consultant: $("consultantFilter"), search: $("searchInput"),
+    monthFilter: $("monthFilterControl"), monthSummary: $("monthSummary"), monthOptions: $("monthOptions"),
     dataStatus: $("dataStatus"), fileList: $("fileList"), empty: $("emptyState"), dashboard: $("dashboard"),
     growthChart: $("growthChart"), trendChart: $("trendChart"), monthlyChart: $("monthlyChart"), rankingChart: $("rankingChart"),
     growthHint: $("growthHint"), detailRows: $("detailRows"), tableEmpty: $("tableEmpty"), dataQuality: $("dataQuality")
@@ -54,27 +59,89 @@
     return Number.isFinite(value) ? value : 0;
   }
 
-  function totalMonths(months, key, maxMonth = 12) {
+  function normalizeMonthScope(monthScope = state.selectedMonths) {
+    if (typeof monthScope === "number") return new Set(Array.from({ length: Math.max(0, Math.min(12, monthScope)) }, (_, index) => index + 1));
+    if (monthScope instanceof Set) return monthScope;
+    return ALL_MONTHS;
+  }
+
+  function totalMonths(months, key, monthScope = state.selectedMonths) {
     if (!months) return 0;
+    const selected = normalizeMonthScope(monthScope);
+    if (!selected.size) return 0;
+    const details = Object.keys(months).some(month => Number(month) >= 1 && Number(month) <= 12);
+    const annual = months["0"];
+    if (key == null && annual != null && (!details || (selected.size === 12 && safeNumber(annual) !== 0))) return safeNumber(annual);
     let total = 0;
     for (const [month, values] of Object.entries(months)) {
       const m = Number(month);
-      if (m === 0 || (m >= 1 && m <= maxMonth)) total += safeNumber(typeof values === "number" ? values : values[key]);
+      if (selected.has(m)) total += safeNumber(typeof values === "number" ? values : values[key]);
     }
+    if (selected.size === 12 && annual != null && key != null) total += safeNumber(typeof annual === "number" ? 0 : annual[key]);
     return total;
   }
 
-  function actualTotal(record, metric, maxMonth = 12) {
-    return record ? totalMonths(record.months, metric, maxMonth) : 0;
+  function actualTotal(record, metric, monthScope = state.selectedMonths) {
+    return record ? totalMonths(record.months, metric, monthScope) : 0;
   }
 
-  function targetTotal(record, maxMonth = 12) {
-    return record ? totalMonths(record.months, null, maxMonth) : 0;
+  function targetTotal(record, monthScope = state.selectedMonths) {
+    return record ? totalMonths(record.months, null, monthScope) : 0;
   }
 
-  function hasAmount(record, metric) {
+  function consultantKey(consultantId, supervisorId) {
+    return `${consultantId}${CONSULTANT_KEY_SEPARATOR}${supervisorId || "__sem_supervisor__"}`;
+  }
+
+  function splitConsultantKey(value) {
+    const parts = String(value || "").split(CONSULTANT_KEY_SEPARATOR);
+    return parts.length > 1 ? { consultantId: parts[0], supervisorId: parts.slice(1).join(CONSULTANT_KEY_SEPARATOR) } : { consultantId: parts[0] || "", supervisorId: "" };
+  }
+
+  function monthLabel(months = state.selectedMonths) {
+    const selected = [...normalizeMonthScope(months)].sort((a, b) => a - b);
+    if (!selected.length) return "Nenhum mês";
+    if (selected.length === 12) return "Todos os meses";
+    if (selected.every((month, index) => index === 0 || month === selected[index - 1] + 1)) {
+      return selected.length === 1 ? MONTH_NAMES[selected[0] - 1] : `${MONTH_NAMES[selected[0] - 1]}–${MONTH_NAMES[selected[selected.length - 1] - 1]}`;
+    }
+    return `${selected.length} meses selecionados`;
+  }
+
+  function hasAmount(record, metric, monthScope = state.selectedMonths) {
     if (!record) return false;
-    return Object.values(record.months || {}).some(value => safeNumber(value[metric]) !== 0 || value[metric + "Rows"] > 0);
+    const selected = normalizeMonthScope(monthScope);
+    return Object.entries(record.months || {}).some(([month, value]) => {
+      const numberMonth = Number(month);
+      const included = selected.has(numberMonth) || (numberMonth === 0 && selected.size === 12);
+      return included && (safeNumber(value[metric]) !== 0 || value[metric + "Rows"] > 0);
+    });
+  }
+
+  function renderMonthOptions() {
+    elements.monthOptions.innerHTML = MONTH_NAMES.map((month, index) => `<label class="month-option"><input type="checkbox" value="${index + 1}"${state.selectedMonths.has(index + 1) ? " checked" : ""}><span>${month}</span></label>`).join("");
+    elements.monthOptions.querySelectorAll("input").forEach(input => input.addEventListener("change", () => {
+      state.selectedMonths = new Set([...elements.monthOptions.querySelectorAll("input:checked")].map(item => Number(item.value)));
+      state.monthSelectionTouched = true;
+      updateMonthSummary();
+      renderDashboard();
+    }));
+    updateMonthSummary();
+  }
+
+  function updateMonthSummary() {
+    if (elements.monthSummary) elements.monthSummary.textContent = monthLabel();
+  }
+
+  function setSelectedMonths(months) {
+    state.selectedMonths = new Set(months);
+    if (elements.monthOptions) elements.monthOptions.querySelectorAll("input").forEach(input => { input.checked = state.selectedMonths.has(Number(input.value)); });
+    updateMonthSummary();
+  }
+
+  function setDefaultMonthsForYear(year) {
+    const max = maxActualMonth(year);
+    setSelectedMonths(max ? Array.from({ length: max }, (_, index) => index + 1) : ALL_MONTHS);
   }
 
   function mergeActual(incoming) {
@@ -119,8 +186,9 @@
       const consultantId = normalizeId(row.consultantId);
       const supervisorId = normalizeId(row.supervisorId);
       if (!consultantId || !supervisorId) continue;
-      const key = `${consultantId}|${supervisorId}`;
-      if (!state.mappings.has(key)) state.mappings.set(key, { ...row, consultantId, supervisorId });
+      const year = Number.isFinite(Number(row.year)) && Number(row.year) > 0 ? Number(row.year) : null;
+      const key = `${year || "*"}|${consultantId}|${supervisorId}`;
+      if (!state.mappings.has(key)) state.mappings.set(key, { ...row, consultantId, supervisorId, year });
       const entry = state.mappings.get(key);
       entry.consultantName = row.consultantName || entry.consultantName;
       entry.supervisorName = row.supervisorName || entry.supervisorName;
@@ -235,6 +303,7 @@
     state.selectedYear = selected;
     elements.year.innerHTML = (state.years.length ? state.years : [2026]).map(year => `<option value="${year}">${year}</option>`).join("");
     elements.year.value = String(selected);
+    if (!state.monthSelectionTouched) setDefaultMonthsForYear(selected);
   }
 
   function actualRows(year) {
@@ -249,9 +318,9 @@
     return state.targets.get(`${scope}|${year}|${normalizeId(id)}`) || null;
   }
 
-  function maxActualMonth(year) {
+  function maxActualMonth(year, predicate = null) {
     let max = 0;
-    for (const row of actualRows(year)) {
+    for (const row of actualRowsByYear(year, predicate)) {
       for (const month of Object.keys(row.months || {})) {
         const value = Number(month);
         if (value >= 1 && value <= 12) max = Math.max(max, value);
@@ -260,12 +329,19 @@
     return max;
   }
 
-  function actualValue(year, metric, maxMonth = 12, predicate = null) {
+  function hasComparableMonths(year) {
+    if (!state.selectedMonths.size) return false;
+    const currentMax = maxActualMonth(year);
+    const previousMax = maxActualMonth(year - 1);
+    return currentMax > 0 && previousMax > 0 && [...state.selectedMonths].every(month => month <= currentMax && month <= previousMax);
+  }
+
+  function actualValue(year, metric, monthScope = state.selectedMonths, predicate = null) {
     let total = 0;
     let found = false;
     for (const row of actualRowsByYear(year, predicate)) {
-      const value = actualTotal(row, metric, maxMonth);
-      if (value !== 0 || hasAmount(row, metric)) found = true;
+      const value = actualTotal(row, metric, monthScope);
+      if (value !== 0 || hasAmount(row, metric, monthScope)) found = true;
       total += value;
     }
     return { value: total, found };
@@ -275,16 +351,16 @@
     return actualRows(year).length > 0;
   }
 
-  function getTarget(scope, id, year, maxMonth = 12) {
-    return targetTotal(targetRecord(scope, id, year), maxMonth);
+  function getTarget(scope, id, year, monthScope = state.selectedMonths) {
+    return targetTotal(targetRecord(scope, id, year), monthScope);
   }
 
-  function sumTargetRows(scope, year, predicate = null, maxMonth = 12) {
+  function sumTargetRows(scope, year, predicate = null, monthScope = state.selectedMonths) {
     let value = 0;
     let found = false;
     for (const row of state.targets.values()) {
       if (row.scope !== scope || Number(row.year) !== Number(year) || (predicate && !predicate(row))) continue;
-      value += targetTotal(row, maxMonth);
+      value += targetTotal(row, monthScope);
       found = true;
     }
     return { value, found };
@@ -297,8 +373,8 @@
     return (rows.find(row => row.supervisorName)?.supervisorName || target?.name || state.supervisorNames.get(id) || `Supervisor ${id}`).trim();
   }
 
-  function consultantName(id, year) {
-    const rows = actualRowsByYear(year, row => row.consultantId === id);
+  function consultantName(id, year, supervisorId = null) {
+    const rows = actualRowsByYear(year, row => row.consultantId === id && (!supervisorId || row.supervisorId === supervisorId));
     const target = targetRecord("consultor", id, year);
     return (rows.find(row => row.consultantName)?.consultantName || target?.name || state.consultantNames.get(id) || `Consultor ${id}`).trim();
   }
@@ -318,17 +394,18 @@
 
   function mappingChoices(consultantId, year) {
     const exact = actualRowsByYear(year, row => row.consultantId === consultantId);
-    const actualYears = [...new Set([...state.actuals.values()].map(row => Number(row.year)))].sort((a, b) => b - a);
-    const latestRows = exact.length ? exact : actualYears.length
-      ? actualRowsByYear(actualYears[0], row => row.consultantId === consultantId)
-      : [];
     const found = new Map();
-    for (const row of latestRows) if (row.supervisorId) found.set(row.supervisorId, row.supervisorName || managerName(row.supervisorId, actualYears[0] || year));
+    for (const row of exact) if (row.supervisorId) found.set(row.supervisorId, row.supervisorName || managerName(row.supervisorId, year));
     if (found.size) return [...found].map(([id, name]) => ({ id, name }));
-    for (const row of state.mappings.values()) {
-      if (row.consultantId === consultantId && !found.has(row.supervisorId)) found.set(row.supervisorId, row.supervisorName || state.supervisorNames.get(row.supervisorId) || `Supervisor ${row.supervisorId}`);
-    }
-    return [...found].map(([id, name]) => ({ id, name }));
+
+    const yearMappings = [...state.mappings.values()].filter(row => row.consultantId === consultantId && Number(row.year) === Number(year));
+    const applicable = yearMappings.length ? yearMappings : [...state.mappings.values()].filter(row => row.consultantId === consultantId && row.year == null);
+    for (const row of applicable) if (!found.has(row.supervisorId)) found.set(row.supervisorId, row.supervisorName || state.supervisorNames.get(row.supervisorId) || `Supervisor ${row.supervisorId}`);
+    // An unscoped code with multiple possible managers is ambiguous. Keep it unassigned
+    // instead of borrowing a relation from another year or placing it under each manager.
+    if (!yearMappings.length && found.size > 1) return [];
+    if (found.size) return [...found].map(([id, name]) => ({ id, name }));
+    return [];
   }
 
   function fillFilters() {
@@ -339,33 +416,41 @@
     elements.supervisor.innerHTML = '<option value="">Todos os supervisores</option>' + managers.map(row => `<option value="${escapeHtml(row.id)}">${escapeHtml(row.name)}</option>`).join("");
     if (managers.some(row => row.id === chosenSupervisor)) elements.supervisor.value = chosenSupervisor;
 
-    const consultantIds = new Set();
-    actualRows(year).forEach(row => consultantIds.add(row.consultantId));
-    for (const row of state.mappings.values()) consultantIds.add(row.consultantId);
-    for (const row of state.targets.values()) if (row.scope === "consultor" && Number(row.year) === year) consultantIds.add(row.id);
-    let consultants = [...consultantIds].map(id => ({ id, name: consultantName(id, year) }));
-    const managerFilter = elements.supervisor.value;
-    if (managerFilter) {
-      const childIds = new Set(actualRowsByYear(year, row => row.supervisorId === managerFilter).map(row => row.consultantId));
-      for (const row of state.mappings.values()) {
-        if (mappingChoices(row.consultantId, year).some(mapping => mapping.id === managerFilter)) childIds.add(row.consultantId);
-      }
-      for (const row of state.targets.values()) {
-        if (row.scope === "consultor" && Number(row.year) === year && mappingChoices(row.id, year).some(mapping => mapping.id === managerFilter)) childIds.add(row.id);
-      }
-      consultants = consultants.filter(row => childIds.has(row.id));
+    const consultantEntries = new Map();
+    const addConsultant = (id, managerId) => {
+      const key = consultantKey(id, managerId);
+      if (!consultantEntries.has(key)) consultantEntries.set(key, { id, managerId, key });
+    };
+    for (const row of actualRows(year)) addConsultant(row.consultantId, row.supervisorId);
+    for (const row of state.targets.values()) {
+      if (row.scope !== "consultor" || Number(row.year) !== year) continue;
+      const choices = mappingChoices(row.id, year);
+      if (choices.length) choices.forEach(choice => addConsultant(row.id, choice.id));
+      else addConsultant(row.id, "__sem_supervisor__");
     }
-    consultants.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
-    elements.consultant.innerHTML = '<option value="">Todos os consultores</option>' + consultants.map(row => `<option value="${escapeHtml(row.id)}">${escapeHtml(row.name)}</option>`).join("");
-    if (consultants.some(row => row.id === chosenConsultant)) elements.consultant.value = chosenConsultant;
+    for (const id of new Set([...state.mappings.values()].map(row => row.consultantId))) {
+      if (actualRowsByYear(year, row => row.consultantId === id).length || targetRecord("consultor", id, year)) continue;
+      const choices = mappingChoices(id, year);
+      choices.forEach(choice => addConsultant(id, choice.id));
+    }
+    let consultants = [...consultantEntries.values()];
+    const managerFilter = elements.supervisor.value;
+    if (managerFilter) consultants = consultants.filter(row => row.managerId === managerFilter);
+    const duplicateIds = new Set(consultants.filter(row => consultants.filter(item => item.id === row.id).length > 1).map(row => row.id));
+    consultants = consultants.map(row => {
+      const managerNameText = managerName(row.managerId, year);
+      const name = consultantName(row.id, year, row.managerId);
+      return { ...row, name: duplicateIds.has(row.id) ? `${name} · ${managerNameText}` : name };
+    }).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+    elements.consultant.innerHTML = '<option value="">Todos os consultores</option>' + consultants.map(row => `<option value="${escapeHtml(row.key)}">${escapeHtml(row.name)}</option>`).join("");
+    if (consultants.some(row => row.key === chosenConsultant)) elements.consultant.value = chosenConsultant;
   }
 
   function buildConsultantSummaries(year, managerId = null) {
     const previousYear = year - 1;
-    const periodMonth = maxActualMonth(year) || 12;
     const ids = new Set(actualRows(year).map(row => row.consultantId));
-    for (const row of state.mappings.values()) ids.add(row.consultantId);
     for (const row of state.targets.values()) if (row.scope === "consultor" && Number(row.year) === year) ids.add(row.id);
+    for (const row of state.mappings.values()) if (mappingChoices(row.consultantId, year).length) ids.add(row.consultantId);
     const summaries = [];
     for (const id of ids) {
       const current = actualRowsByYear(year, row => row.consultantId === id);
@@ -375,31 +460,35 @@
       if (managerId) managers = managers.includes(managerId) ? [managerId] : [];
       if (!managers.length) continue;
       const meta = targetRecord("consultor", id, year);
-      const managerSales = managers.map(idManager => ({
-        id: idManager,
-        sales: current.filter(row => row.supervisorId === idManager).reduce((sum, row) => sum + actualTotal(row, "sales", 12), 0)
-      }));
-      const metaOwner = managerSales.slice().sort((a, b) => b.sales - a.sales)[0]?.id || managers[0];
+      const managerSales = managers.map(idManager => {
+        const rows = current.filter(row => row.supervisorId === idManager);
+        const lastMonth = rows.reduce((latest, row) => Math.max(latest, ...Object.entries(row.months || {}).filter(([, value]) => safeNumber(value.sales) !== 0 || value.salesRows > 0).map(([month]) => Number(month))), 0);
+        return { id: idManager, lastMonth, sales: rows.reduce((sum, row) => sum + actualTotal(row, "sales", ALL_MONTHS), 0) };
+      });
+      const yearMapping = [...state.mappings.values()].filter(row => row.consultantId === id && Number(row.year) === Number(year));
+      const explicitOwner = yearMapping.length === 1 ? managerSales.find(row => row.id === yearMapping[0].supervisorId)?.id : null;
+      const metaOwner = explicitOwner || managerSales.slice().sort((a, b) => b.lastMonth - a.lastMonth || b.sales - a.sales || a.id.localeCompare(b.id))[0]?.id || managers[0];
       for (const idManager of managers) {
         const currentRows = current.filter(row => row.supervisorId === idManager);
         const priorRows = actualRowsByYear(previousYear, row => row.consultantId === id && row.supervisorId === idManager);
-        const previousAnnual = priorRows.reduce((sum, row) => sum + actualTotal(row, "sales", 12), 0);
-        const previousComparable = priorRows.reduce((sum, row) => sum + actualTotal(row, "sales", periodMonth), 0);
-        const currentComparable = currentRows.reduce((sum, row) => sum + actualTotal(row, "sales", periodMonth), 0);
-        const currentSale = currentRows.reduce((sum, row) => sum + actualTotal(row, "sales", 12), 0);
-        const revenue = currentRows.reduce((sum, row) => sum + actualTotal(row, "revenue", 12), 0);
+        const previousAnnual = priorRows.reduce((sum, row) => sum + actualTotal(row, "sales", ALL_MONTHS), 0);
+        const previousComparable = priorRows.reduce((sum, row) => sum + actualTotal(row, "sales"), 0);
+        const currentComparable = currentRows.reduce((sum, row) => sum + actualTotal(row, "sales"), 0);
+        const currentSale = currentRows.reduce((sum, row) => sum + actualTotal(row, "sales"), 0);
+        const revenue = currentRows.reduce((sum, row) => sum + actualTotal(row, "revenue"), 0);
         const ownsTarget = !!meta && idManager === metaOwner;
-        const metaAnnual = ownsTarget ? targetTotal(meta, 12) : 0;
+        const metaPeriod = ownsTarget ? targetTotal(meta) : 0;
+        const metaAnnual = ownsTarget ? targetTotal(meta, ALL_MONTHS) : 0;
         const comparisonPreviousAnnual = maxActualMonth(previousYear) >= 12;
         summaries.push({
-          id, name: consultantName(id, year), managerId: idManager,
+          id, key: consultantKey(id, idManager), name: consultantName(id, year, idManager), managerId: idManager,
           managerName: managerName(idManager, year),
           sales: currentSale, hasSales: currentRows.some(row => hasAmount(row, "sales")),
           revenue, hasRevenue: currentRows.some(row => hasAmount(row, "revenue")),
-          target: metaAnnual, hasTarget: ownsTarget,
-          attainment: metaAnnual ? currentSale / metaAnnual : null,
+          target: metaPeriod, annualTarget: metaAnnual, hasTarget: ownsTarget,
+          attainment: metaPeriod ? currentSale / metaPeriod : null,
           expectedGrowth: ownsTarget && previousAnnual > 0 && comparisonPreviousAnnual ? metaAnnual / previousAnnual - 1 : null,
-          realizedGrowth: previousComparable > 0 && priorRows.length ? currentComparable / previousComparable - 1 : null,
+          realizedGrowth: previousComparable > 0 && hasComparableMonths(year) ? currentComparable / previousComparable - 1 : null,
           currentComparable, previousComparable, previousAnnual,
           months: actualMonthsForConsultant(id, year, idManager), metaMonths: ownsTarget ? meta?.months || {} : {}
         });
@@ -422,26 +511,27 @@
 
   function managerSummary(id, year, consultantSummaries = null) {
     const previousYear = year - 1;
-    const periodMonth = maxActualMonth(year) || 12;
     const currentRows = actualRowsByYear(year, row => row.supervisorId === id);
     const previousRows = actualRowsByYear(previousYear, row => row.supervisorId === id);
     const target = targetRecord("supervisor", id, year);
     const children = consultantSummaries || buildConsultantSummaries(year, id);
     const childTarget = children.filter(row => row.managerId === id && row.hasTarget).reduce((sum, row) => sum + row.target, 0);
-    const sale = currentRows.reduce((sum, row) => sum + actualTotal(row, "sales", 12), 0);
-    const revenue = currentRows.reduce((sum, row) => sum + actualTotal(row, "revenue", 12), 0);
-    const priorAnnual = previousRows.reduce((sum, row) => sum + actualTotal(row, "sales", 12), 0);
-    const currentComparable = currentRows.reduce((sum, row) => sum + actualTotal(row, "sales", periodMonth), 0);
-    const priorComparable = previousRows.reduce((sum, row) => sum + actualTotal(row, "sales", periodMonth), 0);
-    const goal = target ? targetTotal(target, 12) : childTarget;
+    const childAnnualTarget = children.filter(row => row.managerId === id && row.hasTarget).reduce((sum, row) => sum + row.annualTarget, 0);
+    const sale = currentRows.reduce((sum, row) => sum + actualTotal(row, "sales"), 0);
+    const revenue = currentRows.reduce((sum, row) => sum + actualTotal(row, "revenue"), 0);
+    const priorAnnual = previousRows.reduce((sum, row) => sum + actualTotal(row, "sales", ALL_MONTHS), 0);
+    const currentComparable = sale;
+    const priorComparable = previousRows.reduce((sum, row) => sum + actualTotal(row, "sales"), 0);
+    const goal = target ? targetTotal(target) : childTarget;
+    const annualGoal = target ? targetTotal(target, ALL_MONTHS) : childAnnualTarget;
     const isTargetFound = !!target || children.some(row => row.managerId === id && row.hasTarget);
     return {
       id, name: managerName(id, year), sales: sale, hasSales: currentRows.some(row => hasAmount(row, "sales")),
-      revenue, hasRevenue: currentRows.some(row => hasAmount(row, "revenue")), target: goal, hasTarget: isTargetFound,
+      revenue, hasRevenue: currentRows.some(row => hasAmount(row, "revenue")), target: goal, annualTarget: annualGoal, hasTarget: isTargetFound,
       attainment: goal ? sale / goal : null,
-      expectedGrowth: goal && priorAnnual > 0 && maxActualMonth(previousYear) >= 12 ? goal / priorAnnual - 1 : null,
-      realizedGrowth: priorComparable > 0 && previousRows.length ? currentComparable / priorComparable - 1 : null,
-      currentComparable, priorComparable, priorAnnual, periodMonth
+      expectedGrowth: annualGoal && priorAnnual > 0 && maxActualMonth(previousYear) >= 12 ? annualGoal / priorAnnual - 1 : null,
+      realizedGrowth: priorComparable > 0 && hasComparableMonths(year) ? currentComparable / priorComparable - 1 : null,
+      currentComparable, priorComparable, priorAnnual
     };
   }
 
@@ -452,13 +542,13 @@
   function filterSummaries(year) {
     const query = elements.search.value.trim().toLocaleLowerCase("pt-BR");
     const supervisorId = elements.supervisor.value;
-    const consultantId = elements.consultant.value;
+    const consultantKeyFilter = elements.consultant.value;
     const managers = managerChoices(year).filter(row => !supervisorId || row.id === supervisorId);
     const consultantSummaries = buildConsultantSummaries(year, supervisorId || null);
     const visibleManagers = managers.map(item => ({ ...item, ...managerSummary(item.id, year, consultantSummaries) }));
     return visibleManagers.map(manager => {
       let children = managerChildRows(manager.id, year, consultantSummaries);
-      if (consultantId) children = children.filter(row => row.id === consultantId);
+      if (consultantKeyFilter) children = children.filter(row => row.key === consultantKeyFilter);
       if (query) children = children.filter(row => `${row.name} ${row.id} ${manager.name}`.toLocaleLowerCase("pt-BR").includes(query));
       const managerMatches = !query || `${manager.name} ${manager.id}`.toLocaleLowerCase("pt-BR").includes(query);
       if (query && !managerMatches && !children.length) return null;
@@ -471,11 +561,11 @@
   }
 
   function selectedContext(year, groups) {
-    const consultantId = elements.consultant.value;
+    const consultantKeyFilter = elements.consultant.value;
     const managerId = elements.supervisor.value;
-    if (consultantId) {
-      const row = visibleConsultants(groups).find(item => item.id === consultantId);
-      if (row) return { scope: "consultor", row, predicate: actual => actual.consultantId === consultantId && actual.supervisorId === row.managerId };
+    if (consultantKeyFilter) {
+      const row = visibleConsultants(groups).find(item => item.key === consultantKeyFilter);
+      if (row) return { scope: "consultor", row, predicate: actual => actual.consultantId === row.id && actual.supervisorId === row.managerId };
     }
     if (managerId) {
       const row = groups.find(item => item.id === managerId);
@@ -486,20 +576,22 @@
     const target = sumTargetRows("supervisor", year);
     const allConsultantsTarget = sumTargetRows("consultor", year);
     const selectedTarget = target.found ? target : allConsultantsTarget;
-    const periodMonth = maxActualMonth(year) || 12;
-    const priorFull = actualValue(year - 1, "sales");
-    const priorComparable = actualValue(year - 1, "sales", periodMonth);
-    const currentComparable = actualValue(year, "sales", periodMonth);
+    const targetAnnual = sumTargetRows("supervisor", year, null, ALL_MONTHS);
+    const allConsultantsAnnualTarget = sumTargetRows("consultor", year, null, ALL_MONTHS);
+    const selectedAnnualTarget = targetAnnual.found ? targetAnnual : allConsultantsAnnualTarget;
+    const priorFull = actualValue(year - 1, "sales", ALL_MONTHS);
+    const priorComparable = actualValue(year - 1, "sales");
+    const currentComparable = actualValue(year, "sales");
     const hasFullPrevious = maxActualMonth(year - 1) >= 12;
     return {
       scope: "total", row: {
         sales: sale.value, hasSales: sale.found, revenue: revenue.value, hasRevenue: revenue.found,
-        target: selectedTarget.value, hasTarget: selectedTarget.found,
+        target: selectedTarget.value, annualTarget: selectedAnnualTarget.value, hasTarget: selectedTarget.found,
         attainment: selectedTarget.value ? sale.value / selectedTarget.value : null,
-        expectedGrowth: selectedTarget.value && priorFull.value > 0 && hasFullPrevious ? selectedTarget.value / priorFull.value - 1 : null,
-        realizedGrowth: priorComparable.value > 0 ? currentComparable.value / priorComparable.value - 1 : null,
+        expectedGrowth: selectedAnnualTarget.value && priorFull.value > 0 && hasFullPrevious ? selectedAnnualTarget.value / priorFull.value - 1 : null,
+        realizedGrowth: priorComparable.value > 0 && hasComparableMonths(year) ? currentComparable.value / priorComparable.value - 1 : null,
         currentComparable: currentComparable.value, priorComparable: priorComparable.value,
-        priorAnnual: priorFull.value, periodMonth
+        priorAnnual: priorFull.value
       }, predicate: null
     };
   }
@@ -512,16 +604,34 @@
     $("kpiRevenue").textContent = row.hasRevenue ? formatMoney(row.revenue) : "—";
     $("attainmentBar").style.width = `${Math.max(0, Math.min(100, (row.attainment || 0) * 100))}%`;
     $("attainmentLabel").textContent = row.attainment == null ? "Meta não encontrada" : row.attainment >= 1 ? "Meta atingida" : "Em andamento";
-    $("kpiTargetNote").textContent = row.hasTarget ? `${year}` : "Sem meta nesse nível";
-    const periodMonth = row.periodMonth || maxActualMonth(year) || 12;
-    $("kpiSalesPeriod").textContent = periodMonth < 12 ? `Acumulado até ${MONTH_NAMES[periodMonth - 1]}` : "Acumulado do ano";
-    $("kpiRevenuePeriod").textContent = periodMonth < 12 ? `Faturamento até ${MONTH_NAMES[periodMonth - 1]}` : "Faturamento no ano";
+    const period = monthLabel();
+    $("kpiTargetNote").textContent = row.hasTarget ? `${year} · ${period}` : "Sem meta nesse nível";
+    const goalHasMonths = targetRecordsForContext(year, context).some(record => Object.keys(record.months || {}).some(month => Number(month) >= 1 && Number(month) <= 12));
+    $("kpiTargetLabel").textContent = state.selectedMonths.size === 12 ? "Meta do ano" : goalHasMonths ? "Meta dos meses" : "Meta anual";
+    $("kpiTargetDescription").textContent = goalHasMonths && state.selectedMonths.size < 12 ? "Meta somada nos meses selecionados" : "Meta anual consolidada";
+    $("kpiAttainmentLabel").textContent = state.selectedMonths.size === 12 || goalHasMonths ? "Venda ÷ meta selecionada" : "Venda do período ÷ meta anual";
+    $("kpiSalesPeriod").textContent = `Vendas · ${period}`;
+    $("kpiRevenuePeriod").textContent = `Faturamento · ${period}`;
     const previous = year - 1;
     $("growthExpected").textContent = formatPercent(row.expectedGrowth);
     $("growthRealized").textContent = formatPercent(row.realizedGrowth);
-    $("growthExpectedNote").textContent = row.expectedGrowth == null ? `Meta ${year} ÷ venda anual ${previous} − 1` : `${formatMoney(row.target)} de meta ÷ ${formatMoney(row.priorAnnual)} de venda em ${previous}`;
-    $("growthRealizedNote").textContent = row.realizedGrowth == null ? `Venda ${year} ÷ venda ${previous} nos mesmos meses` : `${formatMoney(row.currentComparable)} até ${MONTH_NAMES[periodMonth - 1]} ÷ ${formatMoney(row.priorComparable)} no mesmo período de ${previous}`;
-    $("comparisonPeriod").textContent = periodMonth < 12 ? `Comparação até ${MONTH_NAMES[periodMonth - 1]}` : "Ano completo";
+    $("growthExpectedNote").textContent = row.expectedGrowth == null ? `Meta anual ${year} ÷ venda anual ${previous} − 1` : `${formatMoney(row.annualTarget ?? row.target)} de meta anual ÷ ${formatMoney(row.priorAnnual)} de venda em ${previous}`;
+    $("growthRealizedNote").textContent = row.realizedGrowth == null ? `Venda ${year} ÷ venda ${previous} em ${period}` : `${formatMoney(row.currentComparable)} em ${period} ÷ ${formatMoney(row.priorComparable)} nos mesmos meses de ${previous}`;
+    $("comparisonPeriod").textContent = `Meses: ${period}`;
+  }
+
+  function targetRecordsForContext(year, context) {
+    if (context.scope === "consultor") {
+      const record = targetRecord("consultor", context.row.id, year);
+      return record ? [record] : [];
+    }
+    if (context.scope === "supervisor") {
+      const supervisorTarget = targetRecord("supervisor", context.row.id, year);
+      if (supervisorTarget) return [supervisorTarget];
+      return [...state.targets.values()].filter(row => row.scope === "consultor" && Number(row.year) === Number(year) && mappingChoices(row.id, year).some(item => item.id === context.row.id));
+    }
+    const supervisors = [...state.targets.values()].filter(row => row.scope === "supervisor" && Number(row.year) === Number(year));
+    return supervisors.length ? supervisors : [...state.targets.values()].filter(row => row.scope === "consultor" && Number(row.year) === Number(year));
   }
 
   function svgText(x, y, text, cls = "axis-label", anchor = "start") {
@@ -538,20 +648,21 @@
   function annualChartData(year) {
     const years = [...new Set([...state.years, year])].sort((a,b)=>a-b);
     const supervisorFilter = elements.supervisor.value;
-    const consultantFilter = elements.consultant.value;
+    const consultantFilter = splitConsultantKey(elements.consultant.value);
     return years.map(itemYear => {
       let sale = 0, revenue = 0, target = 0;
       let actualFound = false, targetFound = false;
-      if (consultantFilter) {
-        const actual = actualValue(itemYear, "sales", 12, row => row.consultantId === consultantFilter);
-        const meta = targetRecord("consultor", consultantFilter, itemYear);
+      if (consultantFilter.consultantId) {
+        const actual = actualValue(itemYear, "sales", state.selectedMonths, row => row.consultantId === consultantFilter.consultantId && row.supervisorId === consultantFilter.supervisorId);
+        const meta = targetRecord("consultor", consultantFilter.consultantId, itemYear);
+        const owner = buildConsultantSummaries(itemYear).find(row => row.id === consultantFilter.consultantId && row.managerId === consultantFilter.supervisorId);
         sale = actual.value; actualFound = actual.found;
-        target = targetTotal(meta, 12); targetFound = !!meta;
+        target = owner?.hasTarget ? targetTotal(meta) : 0; targetFound = !!owner?.hasTarget;
       } else if (supervisorFilter) {
-        const actual = actualValue(itemYear, "sales", 12, row => row.supervisorId === supervisorFilter);
+        const actual = actualValue(itemYear, "sales", state.selectedMonths, row => row.supervisorId === supervisorFilter);
         const meta = targetRecord("supervisor", supervisorFilter, itemYear);
         sale = actual.value; actualFound = actual.found;
-        target = targetTotal(meta, 12); targetFound = !!meta;
+        target = targetTotal(meta); targetFound = !!meta;
         if (!targetFound) {
           const children = sumTargetRows("consultor", itemYear, row => mappingChoices(row.id, itemYear).some(m => m.id === supervisorFilter));
           target = children.value; targetFound = children.found;
@@ -596,33 +707,37 @@
     elements.trendChart.innerHTML = svg;
   }
 
+  function targetForMonth(record, month) {
+    if (!record) return 0;
+    const value = record.months && record.months[String(month)];
+    return value == null ? 0 : safeNumber(value);
+  }
+
   function metricsForContext(year, context, month) {
-    const limit = month;
+    const monthScope = new Set([month]);
     if (context.scope === "consultor") {
       const rows = actualRowsByYear(year, row => row.consultantId === context.row.id && row.supervisorId === context.row.managerId);
       const target = targetRecord("consultor", context.row.id, year);
-      const priorRows = actualRowsByYear(year - 1, row => row.consultantId === context.row.id && row.supervisorId === context.row.managerId);
-      const targetOwner = context.row.hasTarget;
       return {
-        sale: rows.reduce((sum,row)=>sum+actualTotal(row,"sales",limit),0),
-        target: targetOwner ? targetTotal(target,limit) : 0,
-        prior: priorRows.reduce((sum,row)=>sum+actualTotal(row,"sales",limit),0)
+        sale: rows.reduce((sum,row)=>sum+actualTotal(row,"sales",monthScope),0),
+        target: context.row.hasTarget ? targetForMonth(target, month) : 0,
+        prior: actualValue(year-1,"sales",monthScope,row=>row.consultantId===context.row.id&&row.supervisorId===context.row.managerId).value
       };
     }
     if (context.scope === "supervisor") {
       const rows = actualRowsByYear(year, row => row.supervisorId === context.row.id);
       const target = targetRecord("supervisor", context.row.id, year);
-      const priorRows = actualRowsByYear(year - 1, row => row.supervisorId === context.row.id);
+      const childTargets = buildConsultantSummaries(year, context.row.id).filter(row=>row.hasTarget).reduce((sum,row)=>sum+targetForMonth(targetRecord("consultor",row.id,year),month),0);
       return {
-        sale: rows.reduce((sum,row)=>sum+actualTotal(row,"sales",limit),0),
-        target: target ? targetTotal(target,limit) : buildConsultantSummaries(year, context.row.id).reduce((sum,row)=>sum+targetTotal(targetRecord("consultor",row.id,year),limit),0),
-        prior: priorRows.reduce((sum,row)=>sum+actualTotal(row,"sales",limit),0)
+        sale: rows.reduce((sum,row)=>sum+actualTotal(row,"sales",monthScope),0),
+        target: target ? targetForMonth(target, month) : childTargets,
+        prior: actualValue(year-1,"sales",monthScope,row=>row.supervisorId===context.row.id).value
       };
     }
-    const sale = actualValue(year,"sales",limit);
-    const target = sumTargetRows("supervisor",year,null,limit);
-    const repTarget = sumTargetRows("consultor",year,null,limit);
-    return { sale:sale.value,target:target.found?target.value:repTarget.value,prior:actualValue(year-1,"sales",limit).value };
+    const sale = actualValue(year,"sales",monthScope);
+    const target = sumTargetRows("supervisor",year,null,monthScope);
+    const repTarget = sumTargetRows("consultor",year,null,monthScope);
+    return { sale:sale.value,target:target.found?target.value:repTarget.value,prior:actualValue(year-1,"sales",monthScope).value };
   }
 
   function renderMonthlyChart(year, context) {
@@ -631,10 +746,7 @@
     const points = Array.from({ length: 12 }, (_, i) => {
       const m = i + 1;
       const current = metricsForContext(year, context, m);
-      const prior = actualValue(year-1,"sales",m,context.predicate).value - actualValue(year-1,"sales",m-1,context.predicate).value;
-      const currentPriorTarget = current.target - metricsForContext(year,context,m-1).target;
-      const currentSale = current.sale - metricsForContext(year,context,m-1).sale;
-      return { month:m, sale:Math.max(0,currentSale), target:Math.max(0,currentPriorTarget), prior:Math.max(0,prior) };
+      return { month:m, sale:Math.max(0,current.sale), target:Math.max(0,current.target), prior:Math.max(0,current.prior), selected:state.selectedMonths.has(m) };
     });
     const maxValue = Math.max(1,...points.flatMap(point=>[point.sale,point.target,point.prior]));
     const topValue = Math.ceil(maxValue / 4 / 1000000) * 1000000 * 4 || maxValue;
@@ -648,7 +760,7 @@
       const cx=left+groupW*(index+.5);const values=[["sale","bar-sales",cx-barW-7],["target","bar-target",cx-barW/2],["prior","bar-prior",cx+7]];
       for(const [key,cls,x] of values){
         const value=point[key],height=value/topValue*plotH;
-        svg+=`<rect x="${x}" y="${top+plotH-height}" width="${barW}" height="${value?Math.max(2,height):1}" rx="3" class="${cls}${value?"":" bar-empty"}"><title>${MONTH_WORDS[point.month-1]}: ${key==="sale"?"venda":key==="target"?"meta":"ano anterior"} ${escapeHtml(formatMoney(value))}</title></rect>`;
+        svg+=`<rect x="${x}" y="${top+plotH-height}" width="${barW}" height="${value?Math.max(2,height):1}" rx="3" class="${cls}${value?"":" bar-empty"}${point.selected?"":" month-unselected"}"><title>${MONTH_WORDS[point.month-1]}${point.selected?"":" (fora da seleção)"}: ${key==="sale"?"venda":key==="target"?"meta":"ano anterior"} ${escapeHtml(formatMoney(value))}</title></rect>`;
       }
       svg+=svgText(cx,H-12,MONTH_NAMES[index],"month-label","middle");
     });
@@ -757,15 +869,16 @@
     const hasSupervisorTargets=[...state.targets.values()].some(row=>row.scope==="supervisor"&&Number(row.year)===year);
     const messages=[];
     if(!hasPrev) messages.push(`<strong>Comparativo pendente:</strong> a base carregada não contém venda realizada de ${previousYear}. Carregue também o arquivo desse ano para calcular perspectiva e crescimento realizado.`);
-    else if(previousMonth<12) messages.push(`<strong>Base parcial:</strong> a venda de ${previousYear} chega até ${MONTH_NAMES[Math.max(0,previousMonth-1)]}. A perspectiva anual fica indisponível até haver os 12 meses; a comparação realizada usa meses equivalentes.`);
+    else if(previousMonth<12) messages.push(`<strong>Base parcial:</strong> a venda de ${previousYear} chega até ${MONTH_NAMES[Math.max(0,previousMonth-1)]}. A perspectiva anual fica indisponível até haver os 12 meses; o realizado compara ${monthLabel()} nos dois anos.`);
+    if(hasPrev && !hasComparableMonths(year)) messages.push(`<strong>Comparação incompleta:</strong> a base não contém todos os meses selecionados nos dois anos; o crescimento realizado fica indisponível.`);
     if(!consultantTargets && hasSupervisorTargets) messages.push(`<strong>Meta por consultor ausente:</strong> neste ano há meta consolidada por supervisor, sem detalhamento de meta individual.`);
     const monthsLabel=currentMonth?`A base de ${year} contém movimentos até ${MONTH_NAMES[currentMonth-1]}.`:`Não há vendas realizadas em ${year} na base carregada.`;
-    if(currentMonth && currentMonth<12) messages.push(`<strong>Período analisado:</strong> ${monthsLabel} Atingimento compara venda acumulada com a meta anual.`);
+    if(currentMonth && currentMonth<12) messages.push(`<strong>Base parcial:</strong> ${monthsLabel} Os indicadores usam ${monthLabel()} conforme o filtro; a perspectiva continua comparando a meta anual com a venda total do ano anterior.`);
     elements.dataQuality.hidden=!messages.length;
     elements.dataQuality.innerHTML=messages.join("<br>");
     const hint=[];
     if(!hasPrev) hint.push(`A base carregada não tem venda realizada de ${previousYear}; os dois indicadores de crescimento ficam sem valor até esse ano ser carregado.`);
-    else if(previousMonth<12) hint.push(`A venda de ${previousYear} não chega a dezembro; a perspectiva anual fica sem valor. A comparação realizada usa os mesmos meses de ${year}.`);
+    else if(previousMonth<12) hint.push(`A venda de ${previousYear} não chega a dezembro; a perspectiva anual fica sem valor. O crescimento realizado usa ${monthLabel()} nos dois anos.`);
     if(!consultantTargets && hasSupervisorTargets) hint.push(`A planilha tem metas por supervisor em ${year}, mas não metas individuais por consultor.`);
     elements.growthHint.hidden=!hint.length;
     elements.growthHint.textContent=hint.join(" ");
@@ -783,10 +896,10 @@
   function downloadCsv() {
     const year=Number(elements.year.value||state.selectedYear||2026);
     const groups=filterSummaries(year);
-    const rows=[["Ano","Nível","Supervisor","Código supervisor","Consultor","Código consultor","Venda realizada","Meta anual","Atingimento","Faturamento","Perspectiva de crescimento","Crescimento realizado"]];
+    const rows=[["Ano","Meses analisados","Nível","Supervisor","Código supervisor","Consultor","Código consultor","Venda realizada","Meta do período","Atingimento","Faturamento","Perspectiva anual de crescimento","Crescimento realizado"]];
     for(const group of groups){
-      rows.push([year,"Supervisor",group.name,group.id,"","",group.hasSales?group.sales:"",group.hasTarget?group.target:"",group.attainment??"",group.hasRevenue?group.revenue:"",group.expectedGrowth??"",group.realizedGrowth??""]);
-      for(const child of group.children) rows.push([year,"Consultor",group.name,group.id,child.name,child.id,child.hasSales?child.sales:"",child.hasTarget?child.target:"",child.attainment??"",child.hasRevenue?child.revenue:"",child.expectedGrowth??"",child.realizedGrowth??""]);
+      rows.push([year,monthLabel(),"Supervisor",group.name,group.id,"","",group.hasSales?group.sales:"",group.hasTarget?group.target:"",group.attainment??"",group.hasRevenue?group.revenue:"",group.expectedGrowth??"",group.realizedGrowth??""]);
+      for(const child of group.children) rows.push([year,monthLabel(),"Consultor",group.name,group.id,child.name,child.id,child.hasSales?child.sales:"",child.hasTarget?child.target:"",child.attainment??"",child.hasRevenue?child.revenue:"",child.expectedGrowth??"",child.realizedGrowth??""]);
     }
     const csv="\uFEFF"+rows.map(row=>row.map(value=>`"${String(value).replace(/"/g,'""')}"`).join(";")).join("\r\n");
     const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
@@ -818,17 +931,20 @@
     renderTable(groups,year);
     renderQuality(year);
     updateDataStatus(year);
-    $("rankingPeriod").textContent=`${year} · até ${MONTH_NAMES[(maxActualMonth(year)||12)-1]}`;
+    $("rankingPeriod").textContent=`${year} · ${monthLabel()}`;
   }
 
-  elements.year.addEventListener("change",()=>{state.selectedYear=Number(elements.year.value);fillFilters();renderDashboard();});
+  elements.year.addEventListener("change",()=>{state.selectedYear=Number(elements.year.value);if(!state.monthSelectionTouched)setDefaultMonthsForYear(state.selectedYear);fillFilters();renderDashboard();});
   elements.supervisor.addEventListener("change",()=>{fillFilters();renderDashboard();});
   elements.consultant.addEventListener("change",renderDashboard);
   elements.search.addEventListener("input",renderDashboard);
+  $("selectAllMonths").addEventListener("click",()=>{state.monthSelectionTouched=true;setSelectedMonths(ALL_MONTHS);renderDashboard();});
+  $("clearMonths").addEventListener("click",()=>{state.monthSelectionTouched=true;setSelectedMonths([]);renderDashboard();});
   $("printButton").addEventListener("click",()=>window.print());
   $("exportButton").addEventListener("click",downloadCsv);
   document.querySelectorAll(".upload-button").forEach(label=>label.addEventListener("click",event=>{
     if(event.target instanceof HTMLInputElement)return;
   }));
+  renderMonthOptions();
   renderDashboard();
 })();

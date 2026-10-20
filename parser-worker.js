@@ -123,61 +123,95 @@ function addMonthly(actual, month, category, amount) {
   if (category === "FATURA" || category === "DEVOLV") { bucket.revenue += amount; bucket.revenueRows++; }
 }
 
-function parseTransactions(workbook, result, stats) {
-  const selected = findSheet(workbook, ["BASE_25", "BASE_24", "BASE", "VENDAS"]);
-  let raw = selected;
-  if (!raw) {
-    raw = findSheet(workbook, [], sheet => !!findHeader(sheet, [
-      ["CD_RP", "CODIGO_CONSULTOR", "CONSULTOR_ID"], ["ANO", "ANO_VENDA", "YEAR"], ["CONSTANT", "CATEGORIA", "CLASSIFICACAO"]
-    ]));
+function inferYearFromSheetName(name) {
+  const fullYear = String(name || "").match(/(?:^|\D)((?:19|20|21)\d{2})(?:\D|$)/);
+  if (fullYear) return Number(fullYear[1]);
+  const shortYear = String(name || "").match(/(?:^|\D)(\d{2})$/);
+  return shortYear ? 2000 + Number(shortYear[1]) : null;
+}
+
+function rowFingerprint(sheet, row, range, yearColumn, inferredYear) {
+  const values = [];
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const value = getValue(sheet, row, c);
+    values.push(value instanceof Date ? value.toISOString() : value == null ? null : String(value));
   }
-  if (!raw) return;
-  const head = findHeader(raw.sheet, [
-    ["CD_RP", "CODIGO_CONSULTOR", "CONSULTOR_ID"], ["ANO", "ANO_VENDA", "YEAR"], ["CONSTANT", "CATEGORIA", "CLASSIFICACAO"]
-  ]);
-  if (!head) return;
-  const col = {
-    consultantId: findColumn(head.headers, ["CD_RP", "CODIGO_CONSULTOR", "CONSULTOR_ID", "COD_REPRESENTANTE"]),
-    supervisorId: findColumn(head.headers, ["COD_GER", "CODIGO_SUPERVISOR", "SUPERVISOR_ID", "COD_GERENTE"]),
-    consultantName: findColumn(head.headers, ["NOMEFANTASIA_PESSOA", "NOME_CONSULTOR", "CONSULTOR", "REPRESENTANTE"]),
-    supervisorName: findColumn(head.headers, ["NOMEFANTASIA_PESSOA3", "NOME_SUPERVISOR", "SUPERVISOR", "GERENTE"]),
-    year: findColumn(head.headers, ["ANO", "ANO_VENDA", "YEAR"]),
-    month: findColumn(head.headers, ["MES_COMPL", "MES_ABRV", "MES", "MONTH"]),
-    date: findColumn(head.headers, ["DTEMISSAO_DOCFAT", "DATA", "DATA_VENDA", "EMISSAO"]),
-    category: findColumn(head.headers, ["CONSTANT", "TIPO", "CATEGORIA", "CLASSIFICACAO", "STATUS_VENDA"]),
-    amount: findColumn(head.headers, ["COLUNA5", "VALOR_VENDA", "VALOR_LIQUIDO", "VLR_TOTAL", "VALOR_TOTAL", "VALOR"])
-  };
-  if (col.consultantId == null || col.year == null || col.category == null || col.amount == null) return;
-  const range = head.range;
+  const year = yearColumn == null ? inferredYear : parseYear(getValue(sheet, row, yearColumn)) || inferredYear;
+  return JSON.stringify([year, values]);
+}
+
+function parseTransactions(workbook, result, stats) {
+  const required = [
+    ["CD_RP", "CODIGO_CONSULTOR", "CONSULTOR_ID", "COD_REPRESENTANTE"],
+    ["CONSTANT", "TIPO", "CATEGORIA", "CLASSIFICACAO", "STATUS_VENDA"]
+  ];
+  const sheets = [];
+  for (const name of workbook.SheetNames || []) {
+    const sheet = workbook.Sheets[name];
+    const head = findHeader(sheet, required);
+    if (head) sheets.push({ name, sheet, head, inferredYear: inferYearFromSheetName(name) });
+  }
+  if (!sheets.length) return;
+
   const buckets = new Map();
   const allowed = new Set(["VENDAS", "CANCEL", "FATURA", "DEVOLV"]);
   const years = new Set();
-  for (let r = head.row + 1; r <= range.e.r; r++) {
-    if (r % 12000 === 0) self.postMessage({ type: "progress", fileName: stats.fileName, detail: `Lendo vendas: linha ${r + 1} de ${range.e.r + 1}` });
-    const category = norm(getValue(raw.sheet, r, col.category));
-    if (!allowed.has(category)) continue;
-    const amount = asAmount(getValue(raw.sheet, r, col.amount));
-    const year = parseYear(getValue(raw.sheet, r, col.year));
-    if (amount == null || year == null) continue;
-    const consultantId = cleanId(getValue(raw.sheet, r, col.consultantId));
-    const consultantName = String(getValue(raw.sheet, r, col.consultantName) || "").trim();
-    if (!consultantId && !consultantName) continue;
-    const supervisorId = cleanId(getValue(raw.sheet, r, col.supervisorId)) || "__sem_supervisor__";
-    const supervisorName = String(getValue(raw.sheet, r, col.supervisorName) || "Sem supervisor").trim();
-    const month = parseMonth(getValue(raw.sheet, r, col.month)) || parseMonth(getValue(raw.sheet, r, col.date)) || 0;
-    const id = consultantId || `nome:${consultantName}`;
-    const key = `${year}|${id}|${supervisorId}`;
-    if (!buckets.has(key)) buckets.set(key, emptyActual(year, id, supervisorId, consultantName || `Consultor ${id}`, supervisorName));
-    const record = buckets.get(key);
-    if (!record.consultantName && consultantName) record.consultantName = consultantName;
-    if (!record.supervisorName && supervisorName) record.supervisorName = supervisorName;
-    addMonthly(record, month, category, amount);
-    years.add(year);
-    stats.actualRows++;
+  const seenRows = new Map();
+  const parsedSheetNames = [];
+  for (let sheetIndex = 0; sheetIndex < sheets.length; sheetIndex++) {
+    const raw = sheets[sheetIndex];
+    const { head } = raw;
+    const col = {
+      consultantId: findColumn(head.headers, ["CD_RP", "CODIGO_CONSULTOR", "CONSULTOR_ID", "COD_REPRESENTANTE"]),
+      supervisorId: findColumn(head.headers, ["COD_GER", "CODIGO_SUPERVISOR", "SUPERVISOR_ID", "COD_GERENTE"]),
+      consultantName: findColumn(head.headers, ["NOMEFANTASIA_PESSOA", "NOME_CONSULTOR", "CONSULTOR", "REPRESENTANTE"]),
+      supervisorName: findColumn(head.headers, ["NOMEFANTASIA_PESSOA3", "NOME_SUPERVISOR", "SUPERVISOR", "GERENTE"]),
+      year: findColumn(head.headers, ["ANO", "ANO_VENDA", "YEAR"]),
+      month: findColumn(head.headers, ["MES_COMPL", "MES_ABRV", "MES", "MONTH"]),
+      date: findColumn(head.headers, ["DTEMISSAO_DOCFAT", "DATA", "DATA_VENDA", "EMISSAO"]),
+      category: findColumn(head.headers, ["CONSTANT", "TIPO", "CATEGORIA", "CLASSIFICACAO", "STATUS_VENDA"]),
+      amount: findColumn(head.headers, ["COLUNA5", "VALOR_VENDA", "VALOR_LIQUIDO", "VLR_TOTAL", "VALOR_TOTAL", "VALOR"])
+    };
+    if (col.consultantId == null || col.category == null || col.amount == null || (col.year == null && !raw.inferredYear)) continue;
+    const range = head.range;
+    let sheetRows = 0;
+    for (let r = head.row + 1; r <= range.e.r; r++) {
+      if (r % 12000 === 0) self.postMessage({ type: "progress", fileName: stats.fileName, detail: `Lendo ${raw.name}: linha ${r + 1} de ${range.e.r + 1}` });
+      const fingerprint = rowFingerprint(raw.sheet, r, range, col.year, raw.inferredYear);
+      const priorSheet = seenRows.get(fingerprint);
+      // Some workbooks repeat a historical base in a second tab. Skip only exact rows
+      // repeated across tabs; repeated transactions inside one tab remain intact.
+      if (priorSheet != null && priorSheet !== sheetIndex) continue;
+      if (priorSheet == null) seenRows.set(fingerprint, sheetIndex);
+      const category = norm(getValue(raw.sheet, r, col.category));
+      if (!allowed.has(category)) continue;
+      const amount = asAmount(getValue(raw.sheet, r, col.amount));
+      const year = (col.year == null ? null : parseYear(getValue(raw.sheet, r, col.year))) || raw.inferredYear;
+      if (amount == null || year == null) continue;
+      const consultantId = cleanId(getValue(raw.sheet, r, col.consultantId));
+      const consultantName = String(getValue(raw.sheet, r, col.consultantName) || "").trim();
+      if (!consultantId && !consultantName) continue;
+      const supervisorName = String(getValue(raw.sheet, r, col.supervisorName) || "Sem supervisor").trim();
+      const supervisorCode = cleanId(getValue(raw.sheet, r, col.supervisorId));
+      const supervisorId = supervisorCode || (supervisorName && norm(supervisorName) !== "SEMSUPERVISOR" ? `nome:${norm(supervisorName)}` : "__sem_supervisor__");
+      const month = parseMonth(getValue(raw.sheet, r, col.month)) || parseMonth(getValue(raw.sheet, r, col.date)) || 0;
+      const id = consultantId || `nome:${consultantName}`;
+      const key = `${year}|${id}|${supervisorId}`;
+      if (!buckets.has(key)) buckets.set(key, emptyActual(year, id, supervisorId, consultantName || `Consultor ${id}`, supervisorName));
+      const record = buckets.get(key);
+      if (!record.consultantName && consultantName) record.consultantName = consultantName;
+      if (!record.supervisorName && supervisorName) record.supervisorName = supervisorName;
+      addMonthly(record, month, category, amount);
+      years.add(year);
+      stats.actualRows++;
+      sheetRows++;
+    }
+    if (sheetRows) parsedSheetNames.push(raw.name);
   }
   result.actuals.push(...buckets.values());
   result.actualYears = [...new Set([...result.actualYears, ...years])].sort((a,b)=>a-b);
-  stats.rawSheet = raw.name;
+  stats.rawSheets = [...new Set([...(stats.rawSheets || []), ...parsedSheetNames])];
+  stats.rawSheet = stats.rawSheets.join(", ");
 }
 
 function parseTargetSheet(workbook, sheet, scope, result, stats) {
@@ -228,7 +262,8 @@ function parseMappings(workbook, result) {
     consultantId: findColumn(head.headers, ["CD_RP", "CODIGO_CONSULTOR", "CONSULTOR_ID"]),
     supervisorId: findColumn(head.headers, ["COD_GER", "CODIGO_SUPERVISOR", "SUPERVISOR_ID"]),
     consultantName: findColumn(head.headers, ["NOMEFANTASIA_PESSOA", "NOME_CONSULTOR", "CONSULTOR"]),
-    supervisorName: findColumn(head.headers, ["NOMEFANTASIA_PESSOA3", "NOME_SUPERVISOR", "SUPERVISOR"])
+    supervisorName: findColumn(head.headers, ["NOMEFANTASIA_PESSOA3", "NOME_SUPERVISOR", "SUPERVISOR"]),
+    year: findColumn(head.headers, ["ANO", "YEAR", "ANO_VENDA"])
   };
   const range = head.range;
   for (let r = head.row + 1; r <= range.e.r; r++) {
@@ -238,6 +273,7 @@ function parseMappings(workbook, result) {
     result.mappings.push({
       consultantId,
       supervisorId,
+      year: col.year == null ? null : parseYear(getValue(selected.sheet, r, col.year)),
       consultantName: String(getValue(selected.sheet, r, col.consultantName) || "").trim(),
       supervisorName: String(getValue(selected.sheet, r, col.supervisorName) || "").trim()
     });

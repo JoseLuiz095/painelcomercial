@@ -67,6 +67,13 @@
             <span>Consultor</span>
             <select id="consultantFilter" aria-label="Filtrar por consultor"><option value="">Todos os consultores</option></select>
           </label>
+          <details id="monthFilterControl" class="filter-control month-filter">
+            <summary aria-label="Selecionar meses"><span>Meses analisados</span><b id="monthSummary">Todos os meses</b></summary>
+            <div class="month-filter-popover">
+              <div class="month-filter-actions"><button id="selectAllMonths" type="button">Todos</button><button id="clearMonths" type="button">Limpar</button></div>
+              <div id="monthOptions" class="month-options" role="group" aria-label="Meses para análise"></div>
+            </div>
+          </details>
           <label class="filter-control search-control">
             <span>Buscar</span>
             <div class="search-input-wrap">
@@ -83,7 +90,7 @@
         <div>
           <p class="section-kicker">SEU PAINEL ESTÁ PRONTO</p>
           <h2>Carregue a planilha para começar</h2>
-          <p>O painel reconhece as abas de vendas, metas e hierarquia do arquivo <strong>ANALISE 2026</strong>. Para comparar vários anos, selecione também as planilhas históricas.</p>
+          <p>O painel reconhece abas de vendas, metas e hierarquia. Ele combina as bases anuais do arquivo e permite filtrar os meses analisados.</p>
         </div>
         <label class="button button-primary upload-button">
           <input class="file-input-proxy" type="file" accept=".xlsx,.xls,.xlsm,.csv" multiple>
@@ -99,12 +106,12 @@
             <strong id="kpiSales">—</strong><div class="kpi-foot"><span id="kpiSalesPeriod">Acumulado do ano</span><span id="kpiSalesCount" class="kpi-trend">—</span></div>
           </article>
           <article class="kpi-card">
-            <div class="kpi-top"><span>Meta do ano</span><span class="kpi-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><path d="m12 12 6-6"/></svg></span></div>
-            <strong id="kpiTarget">—</strong><div class="kpi-foot"><span>Meta anual consolidada</span><span id="kpiTargetNote" class="kpi-trend">—</span></div>
+            <div class="kpi-top"><span id="kpiTargetLabel">Meta do ano</span><span class="kpi-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><path d="m12 12 6-6"/></svg></span></div>
+            <strong id="kpiTarget">—</strong><div class="kpi-foot"><span id="kpiTargetDescription">Meta anual consolidada</span><span id="kpiTargetNote" class="kpi-trend">—</span></div>
           </article>
           <article class="kpi-card">
             <div class="kpi-top"><span>Atingimento</span><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M5 19V5m0 14h14"/><path d="m8 15 3-3 2 2 5-6"/></svg></span></div>
-            <strong id="kpiAttainment">—</strong><div class="progress-track"><span id="attainmentBar"></span></div><div class="kpi-foot"><span>Venda ÷ meta anual</span><span id="attainmentLabel" class="kpi-trend">—</span></div>
+            <strong id="kpiAttainment">—</strong><div class="progress-track"><span id="attainmentBar"></span></div><div class="kpi-foot"><span id="kpiAttainmentLabel">Venda ÷ meta anual</span><span id="attainmentLabel" class="kpi-trend">—</span></div>
           </article>
           <article class="kpi-card">
             <div class="kpi-top"><span>Faturamento</span><span class="kpi-icon"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 11h3m-3 4h8m-8 3h5"/></svg></span></div>
@@ -171,13 +178,13 @@
             <table>
               <thead><tr>
                 <th class="name-col">Supervisor / consultor</th>
-                <th>Venda realizada</th><th>Meta anual</th><th>Atingimento</th><th>Faturamento</th><th>Perspectiva*</th><th>Realizado**</th>
+                <th>Venda realizada</th><th>Meta do período</th><th>Atingimento</th><th>Faturamento</th><th>Perspectiva*</th><th>Realizado**</th>
               </tr></thead>
               <tbody id="detailRows"></tbody>
             </table>
             <div id="tableEmpty" class="table-empty" hidden>Nenhum registro corresponde aos filtros.</div>
           </div>
-          <div class="table-footnote"><span>* Meta do ano selecionado versus venda anual do ano anterior.</span><span>** Vendas do ano selecionado e do anterior em meses equivalentes.</span></div>
+          <div class="table-footnote"><span>* Meta anual versus venda total do ano anterior.</span><span>** Venda dos meses selecionados comparada aos mesmos meses do ano anterior.</span></div>
         </section>
 
         <section id="dataQuality" class="quality-note panel" hidden></section>

@@ -7,13 +7,14 @@ Dashboard estático em português, adaptado para desktop e celular, para acompan
 1. Abra o endereço do GitHub Pages.
 2. Selecione um ou mais arquivos `.xlsx`, `.xls`, `.xlsm` ou `.csv`.
 3. Escolha o ano, supervisor e consultor nos filtros.
-4. Use **Exportar CSV** ou **Imprimir** para baixar uma cópia dos resultados.
+4. Escolha um ou mais meses no filtro **Meses analisados**.
+5. Use **Exportar CSV** ou **Imprimir** para baixar uma cópia dos resultados.
 
 Os arquivos são lidos no próprio navegador em um Web Worker. O painel não envia nem armazena os arquivos. Recarregar a página limpa os dados carregados.
 
 ## Abas reconhecidas
 
-- Vendas: `BASE_25`, `BASE_24`, `BASE` ou uma aba com colunas de consultor, ano e classificação.
+- Vendas: todas as abas que tenham código do consultor, classificação e valor. O ano vem da coluna de ano ou, se ela faltar, do nome da aba (por exemplo, `BASE_23`, `BASE_24`, `BASE_25` ou `BASE_26`).
 - Metas por supervisor: `BASE_META`.
 - Metas por consultor: `BASE_META_REP`.
 - Relação consultor/supervisor: `Planilha2`.
@@ -24,11 +25,11 @@ As metas devem ter colunas de código, nome, ano, tipo, mês e valor. O painel i
 
 - **Venda realizada:** soma dos valores classificados como `VENDAS` e `CANCEL`.
 - **Faturamento:** soma dos valores classificados como `FATURA` e `DEVOLV`.
-- **Atingimento:** venda realizada dividida pela meta anual.
+- **Atingimento:** venda dos meses selecionados dividida pela meta desses meses, quando o arquivo detalha metas mensais. Se só houver meta anual, o painel compara a venda selecionada com essa meta anual.
 - **Perspectiva de crescimento:** meta do ano atual dividida pela venda realizada no ano anterior completo, menos 1.
-- **Crescimento realizado:** venda do ano atual dividida pela venda do ano anterior nos mesmos meses, menos 1.
+- **Crescimento realizado:** venda do ano atual dividida pela venda do ano anterior nos mesmos meses selecionados, menos 1.
 
-O painel deixa o comparativo anual indisponível quando o ano anterior carregado não contém todos os 12 meses. A comparação realizada usa apenas meses equivalentes. Se metas ou vendas de consultores estiverem ausentes no arquivo, esses indicadores ficam em branco no nível correspondente.
+Ao carregar os dados, o filtro começa nos meses disponíveis do ano selecionado. Depois você pode selecionar meses específicos ou todos. A meta usa os valores mensais correspondentes quando a planilha tem esse detalhamento; se houver apenas uma meta anual, ela continua identificada como anual. A perspectiva depende de a venda do ano anterior ter os 12 meses. O painel mantém cada venda associada ao supervisor indicado na própria linha, e relações de consultores sem ano só são usadas quando não há mais de um supervisor possível.
 
 ## Publicação
 
